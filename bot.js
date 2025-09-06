@@ -18,11 +18,27 @@ async function isVerified(ctx) {
   return user && user.verified === 1;
 }
 
+// 🏁 /start command
+bot.start(async (ctx) => {
+  await db.run(
+    "INSERT OR IGNORE INTO users (telegram_id, verified) VALUES (?, 0)",
+    [ctx.from.id]
+  );
+
+  return ctx.reply(
+    `👋 Welcome ${ctx.from.first_name || "User"}!\n\n` +
+    `🔑 This is the Prediction Bot.\n\n` +
+    `To get access, enter your Key using:\n` +
+    `/enterkey YOUR_KEY\n\n` +
+    `👉 If you don't have a Key, contact Admin.`
+  );
+});
+
 // 🔑 /enterkey command
 bot.command("enterkey", async (ctx) => {
   const parts = ctx.message.text.split(" ");
   if (parts.length < 2) {
-    return ctx.reply("❌ Please provide a key. Example: /enterkey VIP12345");
+    return ctx.reply("❌ Please provide a key.\nExample: /enterkey VIP12345");
   }
   const enteredKey = parts[1].trim();
 
@@ -32,7 +48,7 @@ bot.command("enterkey", async (ctx) => {
       "INSERT OR REPLACE INTO users (telegram_id, verified) VALUES (?, ?)",
       [ctx.from.id, 1]
     );
-    return ctx.reply("✅ Access granted via Master Key!");
+    return ctx.reply("✅ Access granted via Master Key!\n\nYou can now use /signal to get predictions.");
   }
 
   // 2. Check Dynamic Keys from DB
@@ -43,40 +59,47 @@ bot.command("enterkey", async (ctx) => {
       "INSERT OR REPLACE INTO users (telegram_id, verified) VALUES (?, ?)",
       [ctx.from.id, 1]
     );
-    return ctx.reply("✅ Access granted via Dynamic Key!");
+    return ctx.reply("✅ Access granted via Dynamic Key!\n\nYou can now use /signal to get predictions.");
   }
 
-  return ctx.reply("❌ Invalid or already used key.");
+  return ctx.reply("❌ Invalid or already used key.\nPlease contact Admin for a valid key.");
 });
 
 // 📢 /signal command
 bot.command("signal", async (ctx) => {
   if (!(await isVerified(ctx))) {
-    return ctx.reply("🔑 You must enter a valid key using /enterkey");
+    return ctx.reply("🔒 You are not verified.\n\nUse /enterkey to unlock access.");
   }
 
   // Random Big/Small + Color Prediction
   const size = Math.random() > 0.5 ? "BIG" : "SMALL";
   const color = Math.random() > 0.5 ? "🔴 RED" : "🟢 GREEN";
 
-  return ctx.reply(`📊 Prediction:\n👉 Size: ${size}\n👉 Color: ${color}`);
+  return ctx.reply(
+    `📊 Prediction:\n\n👉 Size: *${size}*\n👉 Color: *${color}*`,
+    { parse_mode: "Markdown" }
+  );
 });
 
-// 📜 /history command (dummy for now)
+// 📜 /history command (demo)
 bot.command("history", async (ctx) => {
   if (!(await isVerified(ctx))) {
-    return ctx.reply("🔑 You must enter a valid key using /enterkey");
+    return ctx.reply("🔒 You are not verified.\n\nUse /enterkey to unlock access.");
   }
-  return ctx.reply("📜 Last 5 Predictions:\n1. BIG 🔴\n2. SMALL 🟢\n3. BIG 🟢\n4. SMALL 🔴\n5. BIG 🔴");
+
+  return ctx.reply(
+    "📜 Last 5 Predictions:\n" +
+    "1. BIG 🔴\n2. SMALL 🟢\n3. BIG 🟢\n4. SMALL 🔴\n5. BIG 🔴"
+  );
 });
 
-// 🛠️ /genkey (admin only for demo)
+// 🛠️ /genkey (Admin Demo - generate random key)
 bot.command("genkey", async (ctx) => {
   const newKey = "KEY" + Math.floor(100000 + Math.random() * 900000);
   await db.run("INSERT INTO keys (key, used) VALUES (?, 0)", newKey);
-  return ctx.reply(`🆕 New Key generated: \`${newKey}\``, { parse_mode: "Markdown" });
+  return ctx.reply(`🆕 New Key generated:\n\`${newKey}\``, { parse_mode: "Markdown" });
 });
 
-// Start bot
+// 🚀 Launch bot
 bot.launch();
 console.log("🚀 Prediction Bot is running...");
