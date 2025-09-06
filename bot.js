@@ -12,7 +12,7 @@ let db;
   db = await initDB();
 })();
 
-// ✅ Middleware: check user verified or not
+// ✅ Check if user is verified
 async function isVerified(ctx) {
   const user = await db.get("SELECT * FROM users WHERE telegram_id = ?", ctx.from.id);
   return user && user.verified === 1;
@@ -42,7 +42,7 @@ bot.command("enterkey", async (ctx) => {
   }
   const enteredKey = parts[1].trim();
 
-  // 1. Check Master Keys
+  // 1. Master Key check
   if (MASTER_KEYS.includes(enteredKey)) {
     await db.run(
       "INSERT OR REPLACE INTO users (telegram_id, verified) VALUES (?, ?)",
@@ -51,7 +51,7 @@ bot.command("enterkey", async (ctx) => {
     return ctx.reply("✅ Access granted via Master Key!\n\nYou can now use /signal to get predictions.");
   }
 
-  // 2. Check Dynamic Keys from DB
+  // 2. Dynamic Key check
   const keyRow = await db.get("SELECT * FROM keys WHERE key = ? AND used = 0", enteredKey);
   if (keyRow) {
     await db.run("UPDATE keys SET used = 1 WHERE key = ?", enteredKey);
@@ -71,7 +71,6 @@ bot.command("signal", async (ctx) => {
     return ctx.reply("🔒 You are not verified.\n\nUse /enterkey to unlock access.");
   }
 
-  // Random Big/Small + Color Prediction
   const size = Math.random() > 0.5 ? "BIG" : "SMALL";
   const color = Math.random() > 0.5 ? "🔴 RED" : "🟢 GREEN";
 
@@ -81,7 +80,7 @@ bot.command("signal", async (ctx) => {
   );
 });
 
-// 📜 /history command (demo)
+// 📜 /history command
 bot.command("history", async (ctx) => {
   if (!(await isVerified(ctx))) {
     return ctx.reply("🔒 You are not verified.\n\nUse /enterkey to unlock access.");
@@ -93,7 +92,7 @@ bot.command("history", async (ctx) => {
   );
 });
 
-// 🛠️ /genkey (Admin Demo - generate random key)
+// 🛠️ /genkey (admin only for demo)
 bot.command("genkey", async (ctx) => {
   const newKey = "KEY" + Math.floor(100000 + Math.random() * 900000);
   await db.run("INSERT INTO keys (key, used) VALUES (?, 0)", newKey);
