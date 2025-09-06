@@ -1,104 +1,130 @@
 import { Telegraf } from "telegraf";
+import express from "express";
+import bodyParser from "body-parser";
+import sqlite3 from "sqlite3";
+import { open } from "sqlite";
 import dotenv from "dotenv";
-import { initDB } from "./db.js";
 
 dotenv.config();
 
 const bot = new Telegraf(process.env.PREDICTION_BOT_TOKEN);
 const MASTER_KEYS = process.env.MASTER_KEYS.split(",").map(k => k.trim());
 
+// ------------------
+// SQLite DB setup
+// ------------------
 let db;
 (async () => {
-  db = await initDB();
+  db = await open({ filename: "./prediction.db", driver: sqlite3.Database });
+  
+  // Users table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_id TEXT UNIQUE,
+      verified INTEGER DEFAULT 0
+    )
+  `);
+
+  // Keys table (dynamic keys)
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT UNIQUE,
+      used INTEGER DEFAULT 0
+    )
+  `);
 })();
 
-// ✅ Check if user is verified
+// ------------------
+// Express API to receive keys from Key Generator Bot (optional, later)
+// ------------------
+const app = express();
+app.use(bodyParser.json());
+
+app.post("/addkey", async (req, res) => {
+  const { key } = req.body;
+  if (!key) return res.status(400).send("No key provided");
+  await db.run("INSERT OR IGNORE INTO keys (key, used) VALUES (?, 0)", [key]);
+  res.send("✅ Key added to Prediction Bot DB");
+});
+
+app.listen(process.env.PREDICTION_BOT_PORT, () => {
+  console.log(`🚀 Prediction Bot API running on port ${process.env.PREDICTION_BOT_PORT}`);
+});
+
+// ------------------
+// Helper Functions
+// ------------------
 async function isVerified(ctx) {
-  const user = await db.get("SELECT * FROM users WHERE telegram_id = ?", ctx.from.id);
+  const user = await db.get("SELECT * FROM users WHERE telegram_id = ?", [ctx.from.id]);
   return user && user.verified === 1;
 }
 
-// 🏁 /start command
+function generatePrediction() {
+  const periodNumber = Math.floor(10000 + Math.random() * 90000);
+  const choice = Math.random() > 0.5 ? "Big" : "Small";
+  const winRate = Math.floor(50 + Math.random() * 46) + "%"; // 50-95%
+  return { periodNumber, choice, winRate };
+}
+
+// ------------------
+// Bot Commands
+// ------------------
+
+// /start
 bot.start(async (ctx) => {
-  await db.run(
-    "INSERT OR IGNORE INTO users (telegram_id, verified) VALUES (?, 0)",
-    [ctx.from.id]
-  );
-
+  await db.run("INSERT OR IGNORE INTO users (telegram_id, verified) VALUES (?, 0)", [ctx.from.id]);
   return ctx.reply(
-    `👋 Welcome ${ctx.from.first_name || "User"}!\n\n` +
-    `🔑 This is the Prediction Bot.\n\n` +
-    `To get access, enter your Key using:\n` +
-    `/enterkey YOUR_KEY\n\n` +
-    `👉 If you don't have a Key, contact Admin.`
+    `👋 Welcome ${ctx.from.first_name}!\n` +
+    `🔑 Please enter your Key to continue.\n` +
+    `If you don't have a Key, contact Admin.`
   );
 });
 
-// 🔑 /enterkey command
-bot.command("enterkey", async (ctx) => {
-  const parts = ctx.message.text.split(" ");
-  if (parts.length < 2) {
-    return ctx.reply("❌ Please provide a key.\nExample: /enterkey VIP12345");
-  }
-  const enteredKey = parts[1].trim();
+// Handle text messages
+bot.on("text", async (ctx) => {
+  const userId = ctx.from.id;
+  const text = ctx.message.text.trim();
+  
+  // Fetch user
+  const user = await db.get("SELECT * FROM users WHERE telegram_id = ?", [userId]);
 
-  // 1. Master Key check
-  if (MASTER_KEYS.includes(enteredKey)) {
-    await db.run(
-      "INSERT OR REPLACE INTO users (telegram_id, verified) VALUES (?, ?)",
-      [ctx.from.id, 1]
-    );
-    return ctx.reply("✅ Access granted via Master Key!\n\nYou can now use /signal to get predictions.");
+  // Already verified
+  if (user && user.verified) {
+    if (text.toLowerCase() === "signal" || text.toLowerCase() === "/signal" ||
+        text.toLowerCase() === "next" || text.toLowerCase() === "/next") {
+      const { periodNumber, choice, winRate } = generatePrediction();
+      return ctx.reply(
+        `🆔 Period Number: ${periodNumber}\n` +
+        `💰 Purchase: ${choice}\n` +
+        `📊 Win Rate: ${winRate}\n` +
+        `➡️ Next prediction: type /next`
+      );
+    }
+    return ctx.reply("✅ You are verified. Type `signal` to get prediction.");
   }
 
-  // 2. Dynamic Key check
-  const keyRow = await db.get("SELECT * FROM keys WHERE key = ? AND used = 0", enteredKey);
+  // Master key check
+  if (MASTER_KEYS.includes(text)) {
+    await db.run("UPDATE users SET verified = 1 WHERE telegram_id = ?", [userId]);
+    return ctx.reply("✅ Access Granted! Type `signal` to get prediction.");
+  }
+
+  // Dynamic key check
+  const keyRow = await db.get("SELECT * FROM keys WHERE key = ? AND used = 0", [text]);
   if (keyRow) {
-    await db.run("UPDATE keys SET used = 1 WHERE key = ?", enteredKey);
-    await db.run(
-      "INSERT OR REPLACE INTO users (telegram_id, verified) VALUES (?, ?)",
-      [ctx.from.id, 1]
-    );
-    return ctx.reply("✅ Access granted via Dynamic Key!\n\nYou can now use /signal to get predictions.");
+    await db.run("UPDATE keys SET used = 1 WHERE key = ?", [text]);
+    await db.run("UPDATE users SET verified = 1 WHERE telegram_id = ?", [userId]);
+    return ctx.reply("✅ Access Granted via Dynamic Key! Type `signal` to get prediction.");
   }
 
-  return ctx.reply("❌ Invalid or already used key.\nPlease contact Admin for a valid key.");
+  return ctx.reply("❌ Invalid key. Try again or contact Admin.");
 });
 
-// 📢 /signal command
-bot.command("signal", async (ctx) => {
-  if (!(await isVerified(ctx))) {
-    return ctx.reply("🔒 You are not verified.\n\nUse /enterkey to unlock access.");
-  }
-
-  const size = Math.random() > 0.5 ? "BIG" : "SMALL";
-  const color = Math.random() > 0.5 ? "🔴 RED" : "🟢 GREEN";
-
-  return ctx.reply(
-    `📊 Prediction:\n\n👉 Size: *${size}*\n👉 Color: *${color}*`,
-    { parse_mode: "Markdown" }
-  );
-});
-
-// 📜 /history command
-bot.command("history", async (ctx) => {
-  if (!(await isVerified(ctx))) {
-    return ctx.reply("🔒 You are not verified.\n\nUse /enterkey to unlock access.");
-  }
-
-  return ctx.reply(
-    "📜 Last 5 Predictions:\n" +
-    "1. BIG 🔴\n2. SMALL 🟢\n3. BIG 🟢\n4. SMALL 🔴\n5. BIG 🔴"
-  );
-});
-
-// 🛠️ /genkey (admin only for demo)
-bot.command("genkey", async (ctx) => {
-  const newKey = "KEY" + Math.floor(100000 + Math.random() * 900000);
-  await db.run("INSERT INTO keys (key, used) VALUES (?, 0)", newKey);
-  return ctx.reply(`🆕 New Key generated:\n\`${newKey}\``, { parse_mode: "Markdown" });
-});
-
-// 🚀 Launch bot
+// ------------------
+// Launch Bot
+// ------------------
 bot.launch();
+console.log("🚀 Prediction Bot running...");bot.launch();
 console.log("🚀 Prediction Bot is running...");
